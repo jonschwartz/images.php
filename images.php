@@ -12,29 +12,35 @@
 	and it now will resize all of the images
 	in a batch instead of one by one to keep
 	from having the script hit the php engine
-	every time an image is called.  Some 
-	unrelated code has been left out of github
-	version.
+	every time an image is called.
+	
+	This script assumes we want to regenerate
+	the file regardless of whether or not it
+	already exists.
 	
 ***********************************************/
 $www = dirname(__FILE__);
-$php_common = $www.'/php_common_functions.php'; // mostly mysql helper functions
-$no_image = $www.'/parts_images/unavailable.jpg'; // for parts which have no image
-$large = 0;
+$no_image = $www.'/images/parts_images/unavailable.jpg'; // for parts which have no image
+$sizes = array(95, 200, 65, 104); // Array of each size image we wish to generate and cache.
+
+$link = mysql_connect('localhost', 'uername', 'password') or die('Could not connect: ' . mysql_error());
+mysql_select_db('product') or die('Could not select database');
 
 if (isset($_GET['imgfile']))
 {
+	$large = 0; // Do we want to generate a large watermarked image?  Set by get parameter.
 	if (isset($_GET['large']))
 	{
 		$large = $_GET['large'];
 	}
 	$original_image = $_GET['imgfile'];
-	$original_image_path = $www.'/'.$original_image;
-	
 	$final_width = $_GET['max_width'];
 	$final_height = $_GET['max_width'];
 	
-	if (fopen($original_image_path, "r")) 
+	$original_image_path = $www.'/images/parts_images/'.$original_image.'.jpg';
+	$final_image_path = $www.'/cache/'.$final_width.'-'.$original_image.'.jpg';
+	
+	if (file_exists($original_image_path)) 
 	{
 	}
 	else
@@ -51,28 +57,49 @@ if (isset($_GET['imgfile']))
 	{
 		$final_image = resize_original($final_width, $final_height, $original_image_path);
 	}
-	$final_image -> writeImage($www.'/cache/'.$final_width.'-'.$original_image.'.jpg');
-	// write final image to cache so we don't call again for the same image
+	$final_image -> writeImage($final_image_path);  // write final image to cache so we don't call again for the same image
 	
 	header('Content-type: image/jpeg');
 	echo $final_image;
 }
 else
 {
-	$sizes = array(95, 200, 65, 104);
-	// Get all Parts numbers
-	// Get each PN's Image
-	// Convert for all sizes
-	foreach ($sizes as $size)
+	// Get all Parts numbers and  Get each PN's Image
+	$query = 'SELECT `part_number`.`part_number`,
+	(SELECT `image` FROM `products`.`part_image` WHERE `part_image`.`part_number` = `part_number`.`part_number` ORDER BY `part_images`.`version` DESC LIMIT 1) as image
+	FROM `products`.`part_number`
+	NATURAL JOIN `products`.`part_deleted`
+	WHERE `part_deleted`.`deleted` = 0';
+
+	$result = mysql_query($query) or die('Query failed: '.mysql_error()."\n");
+
+	while ($line = mysql_fetch_array($result))
 	{
-		$final_width = $size;
-		$final_height = $size;
-		$original_image_path = $www.'/'.$original_image;
-		$final_image = resize_original($final_width, $final_height, $original_image_path);
-		$final_image->writeImage($www.'/cache/'.$final_width.'-'.$original_image.'.jpg');
+		$lines[] = $line; // This is done to save access time on the db
 	}
-	$final_image = add_watermark($original_image);
-	$final_image -> writeImage($www.'/cache/700-'.$original_image.'.jpg');
+
+	foreach ($lines as $line)
+	{
+		$original_image = $line['image'];
+		$original_image_path = $www.'/images/parts_images/'.$original_image.'.jpg';
+		
+		if (file_exists($original_image_path)) 
+		{
+		}
+		else
+		{
+			$original_image_path = $no_image;
+		}
+		
+		// Convert for all sizes
+		foreach ($sizes as $size)
+		{
+			$final_image = resize_original($size, $size, $original_image_path);
+			$final_image->writeImage($www.'/cache/'.$size.'-'.$original_image.'.jpg');
+		}
+		$final_image = add_watermark($original_image_path);
+		$final_image -> writeImage($www.'/cache/700-'.$original_image.'.jpg'); // fullsized watermark image is stored as "700"
+	}
 }
 
 function resize_original($final_width, $final_height, $original_image)
@@ -111,7 +138,7 @@ function add_watermark($input_image)
 {
 	$www = dirname(__FILE__);
 	$start_image = new Imagick($input_image);
-	$watermark = new Imagick($www.'/watermark.png');
+	$watermark = new Imagick($www.'/images/watermark.png');
 	
 	$input_image_size = $start_image->getImageGeometry();
 	$center_offset_x = 0; // we need to offset the center to know where to start printing out the resized image
